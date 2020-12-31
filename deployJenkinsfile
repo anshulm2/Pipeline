@@ -1,0 +1,95 @@
+pipeline
+{
+    agent 
+    {
+        label 'int-slave'
+    }
+    stages
+    {
+        stage('Checkout')
+        {
+            steps
+            {
+                checkout changelog: false, poll: false, scm: [$class: 'GitSCM', branches: [[name: '*/master']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: '0094b3ff-b950-4fc9-a0b4-e27ac6a00433', url: 'https://bitbucket.javelin.g4s.com/scm/gdcdev/pipeline-int-code.git']]]
+                sh 'cat $WPRFolder/versions.txt'
+            }
+        }
+        
+        stage('Deployment')
+		{
+		    steps
+		    {
+		        script
+		        {
+                    sh 'echo $ENVIRONMENT'
+                  	sh ' > failedModules'
+                    def versionfile = readFile "${WPRFolder}/versions.txt"
+                    def lines = versionfile.readLines()
+                    lines.each
+                    {
+                        String line ->
+                        println line  
+                        def module = sh(script: "echo $line|cut -d' ' -f1", returnStdout: true).trim()
+                        def version = sh(script: "echo $line|cut -d' ' -f2", returnStdout: true).trim()
+						def deploy = sh(script: "echo $line|cut -d' ' -f3", returnStdout: true).trim()
+
+                        println "Module is ${module}"
+                        println "Version is ${version}"
+						println "Deploy flag is ${deploy}"
+                        println "Environment is ${ENV}"
+                        
+                        def job = sh(script: "cat intmapping.txt| grep -i ${module}|cut -d ' ' -f2 ", returnStdout: true).trim()
+						println "Job is ${job}"
+						
+						def intname = sh(script: "cat intmapping.txt| grep -i ${module}|cut -d ' ' -f3 ", returnStdout: true).trim()
+						println "Interface name is ${intname}"
+						
+						if ( "$intname" == "i-erp-out-assetlist-bipublisher" )
+						{
+							intname = "i-erp-out-assetList-bipublisher"
+							println "Inside if:Interface name is ${intname}"
+						}
+						
+						def url="http://10.132.0.23:8083/content/groups/public/com/g4s/integration/${intname}/${version}/${intname}-${version}.jar"
+						
+						println "URL is ${url}"
+						
+						if ( "$deploy" == "Y" || "$deploy" == "y" )
+						{
+				    	try
+						{
+							build job: "${job}", parameters: [[$class: 'MavenMetadataParameterValue', artifactId: "${intname}", artifactUrl: "${url}", classifier: '', description: 'Nexus Stored Build Jar', groupId: 'com.g4s.integration', name: 'PACKAGE', packaging: 'jar', version: "${version}"], string(name: 'PROJECT', value: "${ENV}"), string(name: 'BRANCH', value: 'gdc-develop-2.1')]
+						}
+						catch (err) 
+						{
+								echo err.getMessage()
+								sh "echo ${module} and ${job} >> failedModules"
+						}
+						}
+                    }
+		        }
+		    }
+		}
+		
+		stage('confirmation')
+		{
+             steps 
+			 {
+                script
+				{
+                    ansiColor('xterm') 
+					{
+						        def num = sh(script: "cat failedModules| wc -l ", returnStdout: true).trim()
+								if ( "$num" > 0 )
+								{
+									echo "\033[1;31mAll Failed Jobs till"
+									sh "cat failedModules"
+									echo "\033[0mDone"
+								}
+					}
+                }
+         }
+         }
+		
+    }
+}
